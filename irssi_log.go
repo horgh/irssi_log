@@ -2,11 +2,10 @@
  * Parser for Irssi logs
  */
 
-package main
+package irssi_log
 
 import (
 	"bufio"
-	"flag"
 	"fmt"
 	"log"
 	"os"
@@ -34,6 +33,11 @@ const (
 	Kick
 	Part
 	YourNickChange
+	ServerMode
+	ChannelNotice
+	IgnoreThis
+	ServerNotice
+	BansNone
 )
 
 type LogEntry struct {
@@ -44,7 +48,7 @@ type LogEntry struct {
 	Time time.Time
 
 	// Type of line
-	EntryType EntryType
+	Type EntryType
 
 	// Channel, if available
 	Channel string
@@ -59,58 +63,11 @@ type LogEntry struct {
 	Text string
 }
 
-func main() {
-	logFile := flag.String("log-file", "", "Path to a log file to read.")
-	lineLimit := flag.Int("line-limit", 0, "Limit number of lines to read. 0 for entire log.")
-	locationString := flag.String("location", "America/Vancouver", "Time zone location.")
+const LogOpenTimeLayout = "Mon Jan 02 15:04:05 2006"
 
-	flag.Parse()
-
-	if len(*logFile) == 0 {
-		log.Print("You must specify a log file.")
-		flag.PrintDefaults()
-		os.Exit(1)
-	}
-
-	if *lineLimit < 0 {
-		log.Print("You must specify a line limit >= 0.")
-		flag.PrintDefaults()
-		os.Exit(1)
-	}
-
-	if len(*locationString) == 0 {
-		log.Print("You must specify a location.")
-		flag.PrintDefaults()
-		os.Exit(1)
-	}
-
-	location, err := time.LoadLocation(*locationString)
-	if err != nil {
-		log.Printf("Invalid location: %s", err.Error())
-		os.Exit(1)
-	}
-
-	fh, err := os.Open(*logFile)
-	if err != nil {
-		log.Printf("Unable to open file: %s: %s", *logFile, err.Error())
-		os.Exit(1)
-	}
-	defer fh.Close()
-
-	entries, err := parseLog(fh, *lineLimit, location)
-	if err != nil {
-		log.Printf("Unable to parse log: %s", err.Error())
-		os.Exit(1)
-	}
-
-	log.Printf("Parsed %d entries.", len(entries))
-
-	log.Print("Done!")
-}
-
-// parseLog reads lines of an Irssi log and generates an ordered slice
+// ParseLog reads lines of an Irssi log and generates an ordered slice
 // of LogEntrys
-func parseLog(file *os.File, lineLimit int, location *time.Location) (
+func ParseLog(file *os.File, lineLimit int, location *time.Location) (
 	[]*LogEntry, error) {
 	scanner := bufio.NewScanner(file)
 
@@ -123,20 +80,22 @@ func parseLog(file *os.File, lineLimit int, location *time.Location) (
 	for scanner.Scan() {
 		lineCount++
 
-		entry, err := parseLine(scanner.Text(), location, currentDate)
+		entry, err := ParseLine(scanner.Text(), location, currentDate)
 		if err != nil {
 			return nil, fmt.Errorf("Unable to parse line: %s", err.Error())
 		}
 
-		log.Printf("Parsed line %q", entry)
+		if entry.Type == BansNone {
+			log.Printf("Parsed line %q", entry)
+		}
 
 		entries = append(entries, entry)
 
-		if entry.EntryType == LogOpen || entry.EntryType == DayChange {
+		if entry.Type == LogOpen || entry.Type == DayChange {
 			currentDate = time.Date(entry.Time.Year(), entry.Time.Month(), entry.Time.Day(), 0, 0, 0, 0, location)
 		}
 
-		if lineCount >= lineLimit {
+		if lineLimit > 0 && lineCount >= lineLimit {
 			return entries, nil
 		}
 	}
@@ -149,33 +108,34 @@ func parseLog(file *os.File, lineLimit int, location *time.Location) (
 	return entries, nil
 }
 
-// parseLine parses an Irssi log line
-func parseLine(line string, location *time.Location, currentDate time.Time) (*LogEntry, error) {
-	// Log open type.
+// ParseLine parses an Irssi log line
+func ParseLine(line string, location *time.Location, currentDate time.Time) (
+	*LogEntry, error) {
 
-	// Format of the log open time
-	timeLayout := "Mon Jan 02 15:04:05 2006"
+	// Log open type.
 
 	logOpenPattern := regexp.MustCompile("^--- Log opened (.+)$")
 
 	logOpenMatches := logOpenPattern.FindStringSubmatch(line)
 	if logOpenMatches != nil {
-		entryTime, err := time.ParseInLocation(timeLayout, logOpenMatches[1], location)
+		entryTime, err := time.ParseInLocation(LogOpenTimeLayout, logOpenMatches[1],
+			location)
 		if err != nil {
-			return nil, fmt.Errorf("Unable to parse timestamp: %s: %s", logOpenMatches[1],
-				err.Error())
+			return nil, fmt.Errorf("Unable to parse timestamp: %s: %s",
+				logOpenMatches[1], err.Error())
 		}
 
 		return &LogEntry{
-			Line:      line,
-			Time:      entryTime,
-			EntryType: LogOpen,
+			Line: line,
+			Time: entryTime,
+			Type: LogOpen,
 		}, nil
 	}
 
 	// Join type.
 
 	joinPattern := regexp.MustCompile("^(\\d{2}):(\\d{2}) -!- (\\S+) \\[(\\S+?)\\] has joined (\\S+)$")
+
 	joinMatches := joinPattern.FindStringSubmatch(line)
 	if joinMatches != nil {
 		entryTime, err := clockToTime(joinMatches[1], joinMatches[2], currentDate,
@@ -185,12 +145,12 @@ func parseLine(line string, location *time.Location, currentDate time.Time) (*Lo
 		}
 
 		return &LogEntry{
-			Line:      line,
-			Time:      entryTime,
-			EntryType: Join,
-			Channel:   joinMatches[5],
-			Nick:      joinMatches[3],
-			UserHost:  joinMatches[4],
+			Line:     line,
+			Time:     entryTime,
+			Type:     Join,
+			Channel:  joinMatches[5],
+			Nick:     joinMatches[3],
+			UserHost: joinMatches[4],
 		}, nil
 	}
 
@@ -207,10 +167,10 @@ func parseLine(line string, location *time.Location, currentDate time.Time) (*Lo
 		}
 
 		return &LogEntry{
-			Line:      line,
-			Time:      entryTime,
-			EntryType: ChannelSummary,
-			Channel:   summaryMatches[3],
+			Line:    line,
+			Time:    entryTime,
+			Type:    ChannelSummary,
+			Channel: summaryMatches[3],
 		}, nil
 	}
 
@@ -229,11 +189,11 @@ func parseLine(line string, location *time.Location, currentDate time.Time) (*Lo
 		}
 
 		return &LogEntry{
-			Line:      line,
-			Time:      entryTime,
-			EntryType: Mode,
-			Channel:   modeMatches[3],
-			Nick:      modeMatches[4],
+			Line:    line,
+			Time:    entryTime,
+			Type:    Mode,
+			Channel: modeMatches[3],
+			Nick:    modeMatches[4],
 		}, nil
 	}
 
@@ -250,16 +210,17 @@ func parseLine(line string, location *time.Location, currentDate time.Time) (*Lo
 		}
 
 		return &LogEntry{
-			Line:      line,
-			Time:      entryTime,
-			EntryType: JoinSync,
-			Channel:   syncMatches[3],
+			Line:    line,
+			Time:    entryTime,
+			Type:    JoinSync,
+			Channel: syncMatches[3],
 		}, nil
 	}
 
 	// Channel message
 
-	messagePattern := regexp.MustCompile("^(\\d{2}):(\\d{2}) <(.)(\\S+)> (.+)$")
+	// Text can be totally blank
+	messagePattern := regexp.MustCompile("^(\\d{2}):(\\d{2}) <(.)(\\S+)> (.*)$")
 
 	messageMatches := messagePattern.FindStringSubmatch(line)
 	if messageMatches != nil {
@@ -272,11 +233,11 @@ func parseLine(line string, location *time.Location, currentDate time.Time) (*Lo
 		// TODO: Get channel
 
 		return &LogEntry{
-			Line:      line,
-			Time:      entryTime,
-			EntryType: Message,
-			Nick:      messageMatches[4],
-			Text:      messageMatches[5],
+			Line: line,
+			Time: entryTime,
+			Type: Message,
+			Nick: messageMatches[4],
+			Text: messageMatches[5],
 		}, nil
 	}
 
@@ -295,12 +256,12 @@ func parseLine(line string, location *time.Location, currentDate time.Time) (*Lo
 		// TODO: Get channel
 
 		return &LogEntry{
-			Line:      line,
-			Time:      entryTime,
-			EntryType: Quit,
-			Nick:      quitMatches[3],
-			UserHost:  quitMatches[4],
-			Text:      quitMatches[5],
+			Line:     line,
+			Time:     entryTime,
+			Type:     Quit,
+			Nick:     quitMatches[3],
+			UserHost: quitMatches[4],
+			Text:     quitMatches[5],
 		}, nil
 	}
 
@@ -317,11 +278,11 @@ func parseLine(line string, location *time.Location, currentDate time.Time) (*Lo
 		}
 
 		return &LogEntry{
-			Line:      line,
-			Time:      entryTime,
-			EntryType: NickChange,
-			Nick:      nickMatches[3],
-			Text:      nickMatches[4],
+			Line: line,
+			Time: entryTime,
+			Type: NickChange,
+			Nick: nickMatches[3],
+			Text: nickMatches[4],
 		}, nil
 	}
 
@@ -339,9 +300,9 @@ func parseLine(line string, location *time.Location, currentDate time.Time) (*Lo
 		}
 
 		return &LogEntry{
-			Line:      line,
-			Time:      entryTime,
-			EntryType: DayChange,
+			Line: line,
+			Time: entryTime,
+			Type: DayChange,
 		}, nil
 	}
 
@@ -360,9 +321,9 @@ func parseLine(line string, location *time.Location, currentDate time.Time) (*Lo
 		}
 
 		return &LogEntry{
-			Line:      line,
-			Time:      entryTime,
-			EntryType: LogClosed,
+			Line: line,
+			Time: entryTime,
+			Type: LogClosed,
 		}, nil
 	}
 
@@ -379,10 +340,10 @@ func parseLine(line string, location *time.Location, currentDate time.Time) (*Lo
 		}
 
 		return &LogEntry{
-			Line:      line,
-			Time:      entryTime,
-			EntryType: NowTalking,
-			Channel:   nowMatches[3],
+			Line:    line,
+			Time:    entryTime,
+			Type:    NowTalking,
+			Channel: nowMatches[3],
 		}, nil
 	}
 
@@ -399,11 +360,11 @@ func parseLine(line string, location *time.Location, currentDate time.Time) (*Lo
 		}
 
 		return &LogEntry{
-			Line:      line,
-			Time:      entryTime,
-			EntryType: Emote,
-			Nick:      emoteMatches[3],
-			Text:      emoteMatches[4],
+			Line: line,
+			Time: entryTime,
+			Type: Emote,
+			Nick: emoteMatches[3],
+			Text: emoteMatches[4],
 		}, nil
 	}
 
@@ -420,12 +381,12 @@ func parseLine(line string, location *time.Location, currentDate time.Time) (*Lo
 		}
 
 		return &LogEntry{
-			Line:      line,
-			Time:      entryTime,
-			EntryType: Topic,
-			Nick:      topicMatches[3],
-			Channel:   topicMatches[4],
-			Text:      topicMatches[5],
+			Line:    line,
+			Time:    entryTime,
+			Type:    Topic,
+			Nick:    topicMatches[3],
+			Channel: topicMatches[4],
+			Text:    topicMatches[5],
 		}, nil
 	}
 
@@ -444,12 +405,12 @@ func parseLine(line string, location *time.Location, currentDate time.Time) (*Lo
 		// TODO: 2 nicks
 
 		return &LogEntry{
-			Line:      line,
-			Time:      entryTime,
-			EntryType: Kick,
-			Nick:      kickMatches[3],
-			Channel:   kickMatches[4],
-			Text:      kickMatches[6],
+			Line:    line,
+			Time:    entryTime,
+			Type:    Kick,
+			Nick:    kickMatches[3],
+			Channel: kickMatches[4],
+			Text:    kickMatches[6],
 		}, nil
 	}
 
@@ -466,13 +427,13 @@ func parseLine(line string, location *time.Location, currentDate time.Time) (*Lo
 		}
 
 		return &LogEntry{
-			Line:      line,
-			Time:      entryTime,
-			EntryType: Part,
-			Nick:      partMatches[3],
-			UserHost:  partMatches[4],
-			Channel:   partMatches[5],
-			Text:      partMatches[6],
+			Line:     line,
+			Time:     entryTime,
+			Type:     Part,
+			Nick:     partMatches[3],
+			UserHost: partMatches[4],
+			Channel:  partMatches[5],
+			Text:     partMatches[6],
 		}, nil
 	}
 
@@ -489,10 +450,106 @@ func parseLine(line string, location *time.Location, currentDate time.Time) (*Lo
 		}
 
 		return &LogEntry{
-			Line:      line,
-			Time:      entryTime,
-			EntryType: YourNickChange,
-			Nick:      yourNickMatches[3],
+			Line: line,
+			Time: entryTime,
+			Type: YourNickChange,
+			Nick: yourNickMatches[3],
+		}, nil
+	}
+
+	// Server changed mode
+
+	serverModePattern := regexp.MustCompile("^(\\d{2}):(\\d{2}) -!- ServerMode/(\\S+) \\[(.+)\\] by (\\S+)$")
+
+	serverModeMatches := serverModePattern.FindStringSubmatch(line)
+	if serverModeMatches != nil {
+		entryTime, err := clockToTime(serverModeMatches[1], serverModeMatches[2],
+			currentDate, location)
+		if err != nil {
+			return nil, err
+		}
+
+		// TODO: Parse modes
+
+		return &LogEntry{
+			Line:    line,
+			Time:    entryTime,
+			Type:    ServerMode,
+			Channel: serverModeMatches[3],
+			Text:    serverModeMatches[4],
+			Nick:    serverModeMatches[5],
+		}, nil
+	}
+
+	// Notice to the channel
+
+	channelNoticePattern := regexp.MustCompile("^(\\d{2}):(\\d{2}) -(\\S+):[+@]?(\\S+)- (.*)$")
+
+	channelNoticeMatches := channelNoticePattern.FindStringSubmatch(line)
+	if channelNoticeMatches != nil {
+		entryTime, err := clockToTime(channelNoticeMatches[1],
+			channelNoticeMatches[2], currentDate, location)
+		if err != nil {
+			return nil, err
+		}
+
+		return &LogEntry{
+			Line:    line,
+			Time:    entryTime,
+			Type:    ChannelNotice,
+			Nick:    channelNoticeMatches[3],
+			Text:    channelNoticeMatches[5],
+			Channel: channelNoticeMatches[4],
+		}, nil
+	}
+
+	// Keepnick plugin line.
+	// Just ignore it.
+
+	keepnickPattern := regexp.MustCompile("^(\\d{2}):(\\d{2}) -!- Keepnick:")
+
+	if keepnickPattern.FindStringSubmatch(line) != nil {
+		return &LogEntry{Type: IgnoreThis}, nil
+	}
+
+	// Server notice
+
+	serverNoticePattern := regexp.MustCompile("^(\\d{2}):(\\d{2}) !(\\S+) (.*)$")
+
+	serverNoticeMatches := serverNoticePattern.FindStringSubmatch(line)
+	if serverNoticeMatches != nil {
+		entryTime, err := clockToTime(serverNoticeMatches[1],
+			serverNoticeMatches[2], currentDate, location)
+		if err != nil {
+			return nil, err
+		}
+
+		return &LogEntry{
+			Line: line,
+			Time: entryTime,
+			Type: ServerNotice,
+			Nick: serverNoticeMatches[3],
+			Text: serverNoticeMatches[4],
+		}, nil
+	}
+
+	// Ban check: None
+
+	bansNonePattern := regexp.MustCompile("^(\\d{2}):(\\d{2}) -!- Irssi: No bans in channel (\\S+)$")
+
+	bansNoneMatches := bansNonePattern.FindStringSubmatch(line)
+	if bansNoneMatches != nil {
+		entryTime, err := clockToTime(bansNoneMatches[1], bansNoneMatches[2],
+			currentDate, location)
+		if err != nil {
+			return nil, err
+		}
+
+		return &LogEntry{
+			Line:    line,
+			Time:    entryTime,
+			Type:    BansNone,
+			Channel: bansNoneMatches[3],
 		}, nil
 	}
 
