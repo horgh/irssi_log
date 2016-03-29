@@ -7,7 +7,6 @@ package irssi_log
 import (
 	"bufio"
 	"fmt"
-	"log"
 	"os"
 	"regexp"
 	"strconv"
@@ -65,6 +64,49 @@ type LogEntry struct {
 
 const LogOpenTimeLayout = "Mon Jan 02 15:04:05 2006"
 
+var logOpenPattern = regexp.MustCompile("^--- Log opened (.+)$")
+
+var joinPattern = regexp.MustCompile("^(\\d{2}):(\\d{2}) -!- (\\S+) \\[(\\S+?)\\] has joined (\\S+)$")
+
+var summaryPattern = regexp.MustCompile("^(\\d{2}):(\\d{2}) -!- Irssi: (\\S+): Total of \\d+ nicks \\[\\d+ ops, \\d+ halfops, \\d+ voices, \\d+ normal\\]$")
+
+var modePattern = regexp.MustCompile("^(\\d{2}):(\\d{2}) -!- mode/(\\S+) \\[.+\\] by (\\S+)$")
+
+var syncPattern = regexp.MustCompile("^(\\d{2}):(\\d{2}) -!- Irssi: Join to (\\S+) was synced in \\d+ secs$")
+
+// Text can be totally blank
+var messagePattern = regexp.MustCompile("^(\\d{2}):(\\d{2}) <(.)(\\S+)> (.*)$")
+
+var quitPattern = regexp.MustCompile("^(\\d{2}):(\\d{2}) -!- (\\S+) \\[(\\S+)\\] has quit \\[(.*)\\]$")
+
+var nickPattern = regexp.MustCompile("^(\\d{2}):(\\d{2}) -!- (\\S+) is now known as (\\S+)$")
+
+var dayPattern = regexp.MustCompile("^--- Day changed (.+)$")
+
+var closePattern = regexp.MustCompile("^--- Log closed (.+)$")
+
+var nowPattern = regexp.MustCompile("^(\\d{2}):(\\d{2}) -!- Irssi: You are now talking in (\\S+)$")
+
+var emotePattern = regexp.MustCompile("^(\\d{2}):(\\d{2})  \\* (\\S+) (.*)$")
+
+var topicPattern = regexp.MustCompile("^(\\d{2}):(\\d{2}) -!- (\\S+) changed the topic of (\\S+) to: (.*)$")
+
+var kickPattern = regexp.MustCompile("^(\\d{2}):(\\d{2}) -!- (\\S+) was kicked from (\\S+) by (\\S+) \\[(.*)\\]$")
+
+var partPattern = regexp.MustCompile("^(\\d{2}):(\\d{2}) -!- (\\S+) \\[(\\S+)\\] has left (\\S+) \\[(.*)\\]$")
+
+var yourNickPattern = regexp.MustCompile("^(\\d{2}):(\\d{2}) -!- You're now known as (\\S+)$")
+
+var serverModePattern = regexp.MustCompile("^(\\d{2}):(\\d{2}) -!- ServerMode/(\\S+) \\[(.+)\\] by (\\S+)$")
+
+var channelNoticePattern = regexp.MustCompile("^(\\d{2}):(\\d{2}) -(\\S+):[+@]?(\\S+)- (.*)$")
+
+var keepnickPattern = regexp.MustCompile("^(\\d{2}):(\\d{2}) -!- Keepnick:")
+
+var serverNoticePattern = regexp.MustCompile("^(\\d{2}):(\\d{2}) !(\\S+) (.*)$")
+
+var bansNonePattern = regexp.MustCompile("^(\\d{2}):(\\d{2}) -!- Irssi: No bans in channel (\\S+)$")
+
 // ParseLog reads lines of an Irssi log and generates an ordered slice
 // of LogEntrys
 func ParseLog(file *os.File, lineLimit int, location *time.Location) (
@@ -85,14 +127,12 @@ func ParseLog(file *os.File, lineLimit int, location *time.Location) (
 			return nil, fmt.Errorf("Unable to parse line: %s", err.Error())
 		}
 
-		if entry.Type == BansNone {
-			log.Printf("Parsed line %q", entry)
-		}
-
 		entries = append(entries, entry)
 
+		// Make sure we know what day it is!
 		if entry.Type == LogOpen || entry.Type == DayChange {
-			currentDate = time.Date(entry.Time.Year(), entry.Time.Month(), entry.Time.Day(), 0, 0, 0, 0, location)
+			currentDate = time.Date(entry.Time.Year(), entry.Time.Month(),
+				entry.Time.Day(), 0, 0, 0, 0, location)
 		}
 
 		if lineLimit > 0 && lineCount >= lineLimit {
@@ -112,9 +152,28 @@ func ParseLog(file *os.File, lineLimit int, location *time.Location) (
 func ParseLine(line string, location *time.Location, currentDate time.Time) (
 	*LogEntry, error) {
 
-	// Log open type.
+	// Channel message
 
-	logOpenPattern := regexp.MustCompile("^--- Log opened (.+)$")
+	messageMatches := messagePattern.FindStringSubmatch(line)
+	if messageMatches != nil {
+		entryTime, err := clockToTime(messageMatches[1], messageMatches[2],
+			currentDate, location)
+		if err != nil {
+			return nil, err
+		}
+
+		// TODO: Get channel
+
+		return &LogEntry{
+			Line: line,
+			Time: entryTime,
+			Type: Message,
+			Nick: messageMatches[4],
+			Text: messageMatches[5],
+		}, nil
+	}
+
+	// Log open type.
 
 	logOpenMatches := logOpenPattern.FindStringSubmatch(line)
 	if logOpenMatches != nil {
@@ -133,8 +192,6 @@ func ParseLine(line string, location *time.Location, currentDate time.Time) (
 	}
 
 	// Join type.
-
-	joinPattern := regexp.MustCompile("^(\\d{2}):(\\d{2}) -!- (\\S+) \\[(\\S+?)\\] has joined (\\S+)$")
 
 	joinMatches := joinPattern.FindStringSubmatch(line)
 	if joinMatches != nil {
@@ -156,8 +213,6 @@ func ParseLine(line string, location *time.Location, currentDate time.Time) (
 
 	// Channel summary
 
-	summaryPattern := regexp.MustCompile("^(\\d{2}):(\\d{2}) -!- Irssi: (\\S+): Total of \\d+ nicks \\[\\d+ ops, \\d+ halfops, \\d+ voices, \\d+ normal\\]$")
-
 	summaryMatches := summaryPattern.FindStringSubmatch(line)
 	if summaryMatches != nil {
 		entryTime, err := clockToTime(summaryMatches[1], summaryMatches[2],
@@ -178,8 +233,6 @@ func ParseLine(line string, location *time.Location, currentDate time.Time) (
 
 	// TODO: Parse out the modes and who/what targeted
 
-	modePattern := regexp.MustCompile("^(\\d{2}):(\\d{2}) -!- mode/(\\S+) \\[.+\\] by (\\S+)$")
-
 	modeMatches := modePattern.FindStringSubmatch(line)
 	if modeMatches != nil {
 		entryTime, err := clockToTime(modeMatches[1], modeMatches[2], currentDate,
@@ -199,8 +252,6 @@ func ParseLine(line string, location *time.Location, currentDate time.Time) (
 
 	// Channel sync
 
-	syncPattern := regexp.MustCompile("^(\\d{2}):(\\d{2}) -!- Irssi: Join to (\\S+) was synced in \\d+ secs$")
-
 	syncMatches := syncPattern.FindStringSubmatch(line)
 	if syncMatches != nil {
 		entryTime, err := clockToTime(syncMatches[1], syncMatches[2], currentDate,
@@ -217,33 +268,7 @@ func ParseLine(line string, location *time.Location, currentDate time.Time) (
 		}, nil
 	}
 
-	// Channel message
-
-	// Text can be totally blank
-	messagePattern := regexp.MustCompile("^(\\d{2}):(\\d{2}) <(.)(\\S+)> (.*)$")
-
-	messageMatches := messagePattern.FindStringSubmatch(line)
-	if messageMatches != nil {
-		entryTime, err := clockToTime(messageMatches[1], messageMatches[2],
-			currentDate, location)
-		if err != nil {
-			return nil, err
-		}
-
-		// TODO: Get channel
-
-		return &LogEntry{
-			Line: line,
-			Time: entryTime,
-			Type: Message,
-			Nick: messageMatches[4],
-			Text: messageMatches[5],
-		}, nil
-	}
-
 	// Quit
-
-	quitPattern := regexp.MustCompile("^(\\d{2}):(\\d{2}) -!- (\\S+) \\[(\\S+)\\] has quit \\[(.*)\\]$")
 
 	quitMatches := quitPattern.FindStringSubmatch(line)
 	if quitMatches != nil {
@@ -267,8 +292,6 @@ func ParseLine(line string, location *time.Location, currentDate time.Time) (
 
 	// Nick change
 
-	nickPattern := regexp.MustCompile("^(\\d{2}):(\\d{2}) -!- (\\S+) is now known as (\\S+)$")
-
 	nickMatches := nickPattern.FindStringSubmatch(line)
 	if nickMatches != nil {
 		entryTime, err := clockToTime(nickMatches[1], nickMatches[2], currentDate,
@@ -288,8 +311,6 @@ func ParseLine(line string, location *time.Location, currentDate time.Time) (
 
 	// Day change
 
-	dayPattern := regexp.MustCompile("^--- Day changed (.+)$")
-
 	dayMatches := dayPattern.FindStringSubmatch(line)
 	if dayMatches != nil {
 		timeLayout := "Mon Jan 02 2006"
@@ -307,8 +328,6 @@ func ParseLine(line string, location *time.Location, currentDate time.Time) (
 	}
 
 	// Log closed
-
-	closePattern := regexp.MustCompile("^--- Log closed (.+)$")
 
 	closeMatches := closePattern.FindStringSubmatch(line)
 	if closeMatches != nil {
@@ -329,8 +348,6 @@ func ParseLine(line string, location *time.Location, currentDate time.Time) (
 
 	// Now talking in
 
-	nowPattern := regexp.MustCompile("^(\\d{2}):(\\d{2}) -!- Irssi: You are now talking in (\\S+)$")
-
 	nowMatches := nowPattern.FindStringSubmatch(line)
 	if nowMatches != nil {
 		entryTime, err := clockToTime(nowMatches[1], nowMatches[2], currentDate,
@@ -348,8 +365,6 @@ func ParseLine(line string, location *time.Location, currentDate time.Time) (
 	}
 
 	// Channel emote
-
-	emotePattern := regexp.MustCompile("^(\\d{2}):(\\d{2})  \\* (\\S+) (.*)$")
 
 	emoteMatches := emotePattern.FindStringSubmatch(line)
 	if emoteMatches != nil {
@@ -370,8 +385,6 @@ func ParseLine(line string, location *time.Location, currentDate time.Time) (
 
 	// Topic change
 
-	topicPattern := regexp.MustCompile("^(\\d{2}):(\\d{2}) -!- (\\S+) changed the topic of (\\S+) to: (.*)$")
-
 	topicMatches := topicPattern.FindStringSubmatch(line)
 	if topicMatches != nil {
 		entryTime, err := clockToTime(topicMatches[1], topicMatches[2], currentDate,
@@ -391,8 +404,6 @@ func ParseLine(line string, location *time.Location, currentDate time.Time) (
 	}
 
 	// Kick
-
-	kickPattern := regexp.MustCompile("^(\\d{2}):(\\d{2}) -!- (\\S+) was kicked from (\\S+) by (\\S+) \\[(.*)\\]$")
 
 	kickMatches := kickPattern.FindStringSubmatch(line)
 	if kickMatches != nil {
@@ -416,8 +427,6 @@ func ParseLine(line string, location *time.Location, currentDate time.Time) (
 
 	// Part
 
-	partPattern := regexp.MustCompile("^(\\d{2}):(\\d{2}) -!- (\\S+) \\[(\\S+)\\] has left (\\S+) \\[(.*)\\]$")
-
 	partMatches := partPattern.FindStringSubmatch(line)
 	if partMatches != nil {
 		entryTime, err := clockToTime(partMatches[1], partMatches[2], currentDate,
@@ -439,8 +448,6 @@ func ParseLine(line string, location *time.Location, currentDate time.Time) (
 
 	// Your nick change
 
-	yourNickPattern := regexp.MustCompile("^(\\d{2}):(\\d{2}) -!- You're now known as (\\S+)$")
-
 	yourNickMatches := yourNickPattern.FindStringSubmatch(line)
 	if yourNickMatches != nil {
 		entryTime, err := clockToTime(yourNickMatches[1], yourNickMatches[2],
@@ -458,8 +465,6 @@ func ParseLine(line string, location *time.Location, currentDate time.Time) (
 	}
 
 	// Server changed mode
-
-	serverModePattern := regexp.MustCompile("^(\\d{2}):(\\d{2}) -!- ServerMode/(\\S+) \\[(.+)\\] by (\\S+)$")
 
 	serverModeMatches := serverModePattern.FindStringSubmatch(line)
 	if serverModeMatches != nil {
@@ -483,8 +488,6 @@ func ParseLine(line string, location *time.Location, currentDate time.Time) (
 
 	// Notice to the channel
 
-	channelNoticePattern := regexp.MustCompile("^(\\d{2}):(\\d{2}) -(\\S+):[+@]?(\\S+)- (.*)$")
-
 	channelNoticeMatches := channelNoticePattern.FindStringSubmatch(line)
 	if channelNoticeMatches != nil {
 		entryTime, err := clockToTime(channelNoticeMatches[1],
@@ -506,15 +509,11 @@ func ParseLine(line string, location *time.Location, currentDate time.Time) (
 	// Keepnick plugin line.
 	// Just ignore it.
 
-	keepnickPattern := regexp.MustCompile("^(\\d{2}):(\\d{2}) -!- Keepnick:")
-
 	if keepnickPattern.FindStringSubmatch(line) != nil {
 		return &LogEntry{Type: IgnoreThis}, nil
 	}
 
 	// Server notice
-
-	serverNoticePattern := regexp.MustCompile("^(\\d{2}):(\\d{2}) !(\\S+) (.*)$")
 
 	serverNoticeMatches := serverNoticePattern.FindStringSubmatch(line)
 	if serverNoticeMatches != nil {
@@ -534,8 +533,6 @@ func ParseLine(line string, location *time.Location, currentDate time.Time) (
 	}
 
 	// Ban check: None
-
-	bansNonePattern := regexp.MustCompile("^(\\d{2}):(\\d{2}) -!- Irssi: No bans in channel (\\S+)$")
 
 	bansNoneMatches := bansNonePattern.FindStringSubmatch(line)
 	if bansNoneMatches != nil {
