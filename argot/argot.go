@@ -15,6 +15,9 @@ import (
 	"time"
 )
 
+var messageIgnorePattern = regexp.MustCompile("[^a-zA-Z0-9,.\\-!(@=_`%+/*#):?' $]")
+var urlPattern = regexp.MustCompile("https?:")
+
 func main() {
 	logFile := flag.String("log-file", "", "Path to a log file to read.")
 	lineLimit := flag.Int("line-limit", 0, "Limit number of lines to read. 0 for entire log.")
@@ -60,29 +63,31 @@ func main() {
 	}
 	defer fh.Close()
 
+	log.Printf("Parsing log...")
 	entries, err := irssi_log.ParseLog(fh, *lineLimit, location)
 	if err != nil {
 		log.Printf("Unable to parse log: %s", err.Error())
 		os.Exit(1)
 	}
 
-	log.Printf("Parsed %d log entries.", len(entries))
-
+	log.Printf("Analyzing log entries...")
 	words, err := analyzeEntries(entries)
 	if err != nil {
 		log.Printf("Unable to analyze log entries: %s", err.Error())
 		os.Exit(1)
 	}
 
-	sentence, err := generateText(words, *sentenceLength)
-	if err != nil {
-		log.Printf("Unable to generate text: %s", err.Error())
-		os.Exit(1)
+	log.Printf("Generating text...")
+
+	for i := 0; i < 10; i++ {
+		sentence, err := generateText(words, *sentenceLength)
+		if err != nil {
+			log.Printf("Unable to generate text: %s", err.Error())
+			os.Exit(1)
+		}
+
+		log.Printf("Sentence: %s", sentence)
 	}
-
-	log.Printf("Sentence: %s", sentence)
-
-	log.Print("Done!")
 }
 
 // analyzeEntries takes irssi log entries and determines how often words
@@ -95,7 +100,8 @@ func analyzeEntries(entries []*irssi_log.LogEntry) (map[string]map[string]int,
 	var words map[string]map[string]int
 	words = make(map[string]map[string]int)
 
-	currentWord := ""
+	word0 := ""
+	word1 := ""
 
 	for _, entry := range entries {
 		// We only care about messages right now.
@@ -109,13 +115,12 @@ func analyzeEntries(entries []*irssi_log.LogEntry) (map[string]map[string]int,
 			continue
 		}
 
-		re := regexp.MustCompile("[^a-zA-Z0-9,.\\-!(@=_`%+/*#):?' ]")
-		if re.MatchString(entry.Text) {
-			log.Printf("Ignore line %s", entry.Text)
-			continue
-		}
+		//if messageIgnorePattern.MatchString(entry.Text) {
+		//	log.Printf("Ignore line %s", entry.Text)
+		//	continue
+		//}
 
-		// Break the text into words.
+		// Break the text into "words".
 		entryWords := strings.Split(entry.Text, " ")
 
 		for _, word := range entryWords {
@@ -124,74 +129,98 @@ func analyzeEntries(entries []*irssi_log.LogEntry) (map[string]map[string]int,
 				continue
 			}
 
-			// Record that this word follows the last.
-			if len(currentWord) > 0 {
-				_, ok := words[currentWord]
-				if !ok {
-					words[currentWord] = make(map[string]int)
-				}
-
-				words[currentWord][wordTrim]++
+			if urlPattern.MatchString(wordTrim) {
+				continue
 			}
 
-			// Set this word as our active one.
-			currentWord = wordTrim
+			// Record that this word follows.
+			if len(word0) > 0 && len(word1) > 0 {
+				phrase := word0 + " " + word1
+				_, ok := words[phrase]
+				if !ok {
+					words[phrase] = make(map[string]int)
+				}
+
+				words[phrase][wordTrim]++
+			}
+
+			// Update previous word.
+			word0 = word1
+			word1 = wordTrim
 		}
 	}
-
-	//log.Printf("words %q", words)
 
 	return words, nil
 }
 
 // generateText generates some random text given a word frequency mapping.
-func generateText(wordCounts map[string]map[string]int, length int) (string, error) {
-	// Pick a random word to start at.
+func generateText(wordCounts map[string]map[string]int, length int) (string,
+	error) {
+	// Pick a random word/phrase to start at.
 
-	var words []string
-	for word, _ := range wordCounts {
-		words = append(words, word)
+	// Pull out possible phrases.
+	var phrases []string
+	for phrase, _ := range wordCounts {
+		phrases = append(phrases, phrase)
 	}
 
-	currentWord := words[rand.Intn(len(words))]
+	randomPhrase := phrases[rand.Intn(len(phrases))]
+	split := strings.Split(randomPhrase, " ")
+	word0 := split[0]
+	word1 := split[1]
 
-	log.Printf("Start word: %s", currentWord)
+	log.Printf("Start words: %s %s", word0, word1)
 
-	sentence := currentWord
-	wordCount := 1
+	// Generate text
 
-	for ; wordCount < length; wordCount++ {
+	sentence := randomPhrase
 
-		// Determine highest frequency words following this word.
-
-		// If there are none recorded following it, pick one at random.
-
-		_, ok := wordCounts[currentWord]
-		if !ok {
-			currentWord = words[rand.Intn(len(words))]
-		} else {
-			frequency := 0
-			var possibleWords []string
-
-			for word, count := range wordCounts[currentWord] {
-				if count < frequency {
-					continue
-				}
-
-				if count > frequency {
-					frequency = 0
-					possibleWords = nil
-				}
-
-				possibleWords = append(possibleWords, word)
-			}
-
-			// Pick one
-			currentWord = possibleWords[rand.Intn(len(possibleWords))]
-		}
-
-		sentence += " " + currentWord
+	for wordCount := 2; wordCount < length; wordCount++ {
+		word, wordn0, wordn1 := pickWord(wordCounts, phrases, word0, word1)
+		sentence += word
+		word0 = wordn0
+		word1 = wordn1
 	}
 
 	return sentence, nil
+}
+
+// pickWord decides on the next word.
+//
+// We decide this based on the last words.
+func pickWord(wordCounts map[string]map[string]int, phrases []string,
+	word0 string, word1 string) (string, string, string) {
+	phrase := word0 + " " + word1
+
+	// If there are no words recorded following it, pick one at random.
+
+	_, ok := wordCounts[phrase]
+	if !ok {
+		log.Printf("Nothing known to follow [%s] [%s]", word0, word1)
+		phrase = phrases[rand.Intn(len(phrases))]
+		split := strings.Split(phrase, " ")
+		return ". ", split[0], split[1]
+	}
+
+	// Find words that follow the phrase.
+
+	frequency := 0
+	var possibleWords []string
+
+	for word, count := range wordCounts[phrase] {
+		if count < frequency {
+			continue
+		}
+
+		if count > frequency {
+			frequency = 0
+			possibleWords = nil
+		}
+
+		possibleWords = append(possibleWords, word)
+	}
+
+	// Pick one
+	randomWord := possibleWords[rand.Intn(len(possibleWords))]
+	return " " + randomWord, word1, randomWord
 }
