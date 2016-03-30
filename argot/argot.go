@@ -5,43 +5,26 @@
 package main
 
 import (
+	"bufio"
 	"flag"
+	"io"
 	"log"
 	"math/rand"
 	"os"
-	"regexp"
 	"sort"
 	"strings"
-	"summercat.com/irssi_log"
 	"time"
 )
 
-var messageIgnorePattern = regexp.MustCompile("[^a-zA-Z0-9,.\\-!(@=_`%+/*#):?' $]")
-var urlPattern = regexp.MustCompile("https?:")
-
 func main() {
-	logFile := flag.String("log-file", "", "Path to a log file to read.")
-	lineLimit := flag.Int("line-limit", 0, "Limit number of lines to read. 0 for entire log.")
-	locationString := flag.String("location", "America/Vancouver", "Time zone location.")
+	file := flag.String("file", "", "Path to a file to read. Should be one block of text. You can process a log to get this using the messages_to_string program.")
 	sentenceLength := flag.Int("sentence-length", 12, "Numbers of words to generate.")
 	k := flag.Int("k", 2, "How many preceding words to take into account when picking the next.")
 
 	flag.Parse()
 
-	if len(*logFile) == 0 {
-		log.Print("You must specify a log file.")
-		flag.PrintDefaults()
-		os.Exit(1)
-	}
-
-	if *lineLimit < 0 {
-		log.Print("You must specify a line limit >= 0.")
-		flag.PrintDefaults()
-		os.Exit(1)
-	}
-
-	if len(*locationString) == 0 {
-		log.Print("You must specify a location.")
+	if len(*file) == 0 {
+		log.Print("You must specify a file.")
 		flag.PrintDefaults()
 		os.Exit(1)
 	}
@@ -58,31 +41,27 @@ func main() {
 		os.Exit(1)
 	}
 
-	location, err := time.LoadLocation(*locationString)
+	fh, err := os.Open(*file)
 	if err != nil {
-		log.Printf("Invalid location: %s", err.Error())
-		os.Exit(1)
-	}
-
-	fh, err := os.Open(*logFile)
-	if err != nil {
-		log.Printf("Unable to open file: %s: %s", *logFile, err.Error())
+		log.Printf("Unable to open file: %s: %s", *file, err.Error())
 		os.Exit(1)
 	}
 	defer fh.Close()
 
-	log.Printf("Parsing log...")
-	entries, err := irssi_log.ParseLog(fh, *lineLimit, location)
-	if err != nil {
-		log.Printf("Unable to parse log: %s", err.Error())
-		os.Exit(1)
-	}
-
-	log.Printf("Convert log entries to string...")
-	logText, err := messagesToText(entries)
-	if err != nil {
-		log.Print(err.Error())
-		os.Exit(1)
+	log.Printf("Reading file...")
+	reader := bufio.NewReader(fh)
+	logText := ""
+	buf := make([]byte, 10*1024*1024)
+	for {
+		n, err := reader.Read(buf)
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			log.Printf("Read error: %s", err.Error())
+			os.Exit(1)
+		}
+		logText += string(buf[0:n])
 	}
 
 	log.Printf("Generating suffix array...")
@@ -107,28 +86,6 @@ func main() {
 		os.Exit(1)
 	}
 	log.Printf("Generated: %s", text)
-}
-
-// messagesToText takes log entries and builds one large string of text
-// from all of them.
-func messagesToText(entries []*irssi_log.LogEntry) (string, error) {
-	text := ""
-
-	for _, entry := range entries {
-		if entry.Type != irssi_log.Message {
-			continue
-		}
-
-		// Ignore certain lines. Automated text etc.
-
-		if strings.HasPrefix(entry.Text, " ") {
-			continue
-		}
-
-		text += entry.Text + " "
-	}
-
-	return strings.TrimSpace(text), nil
 }
 
 // buildSuffixArray takes a text and generates a suffix array.
