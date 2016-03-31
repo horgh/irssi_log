@@ -11,6 +11,7 @@ import (
 	"log"
 	"math/rand"
 	"os"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -41,6 +42,8 @@ func main() {
 		os.Exit(1)
 	}
 
+	logMemory()
+
 	fh, err := os.Open(*file)
 	if err != nil {
 		log.Printf("Unable to open file: %s: %s", *file, err.Error())
@@ -51,7 +54,7 @@ func main() {
 	log.Printf("Reading file...")
 	reader := bufio.NewReader(fh)
 	logText := ""
-	buf := make([]byte, 10*1024*1024)
+	buf := make([]byte, 28*1024*1024)
 	for {
 		n, err := reader.Read(buf)
 		if err != nil {
@@ -64,6 +67,8 @@ func main() {
 		logText += string(buf[0:n])
 	}
 
+	logMemory()
+
 	log.Printf("Generating suffix array...")
 	a, err := buildSuffixArray(logText)
 	if err != nil {
@@ -71,12 +76,16 @@ func main() {
 		os.Exit(1)
 	}
 
+	logMemory()
+
 	log.Printf("Sorting suffix array...")
 	s, err := sortSuffixArray(a)
 	if err != nil {
 		log.Print(err.Error())
 		os.Exit(1)
 	}
+
+	logMemory()
 
 	log.Printf("Generating text...")
 	rand.Seed(time.Now().UnixNano())
@@ -211,4 +220,13 @@ func getKWords(text string, skip int, count int) string {
 	}
 
 	return ""
+}
+
+// logMemory logs the memory used.
+func logMemory() {
+	var mem runtime.MemStats
+	runtime.ReadMemStats(&mem)
+	var allocMiB float64 = float64(mem.Alloc) / 1024.0 / 1024.0
+	var sysMiB float64 = float64(mem.Sys) / 1024.0 / 1024.0
+	log.Printf("Alloc: %.2f MiB Sys: %.2f MiB", allocMiB, sysMiB)
 }
