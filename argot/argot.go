@@ -7,6 +7,7 @@ package main
 import (
 	"bufio"
 	"flag"
+	"fmt"
 	"io"
 	"log"
 	"math/rand"
@@ -44,33 +45,17 @@ func main() {
 
 	logMemory()
 
-	fh, err := os.Open(*file)
-	if err != nil {
-		log.Printf("Unable to open file: %s: %s", *file, err.Error())
-		os.Exit(1)
-	}
-	defer fh.Close()
-
 	log.Printf("Reading file...")
-	reader := bufio.NewReader(fh)
-	logText := ""
-	buf := make([]byte, 28*1024*1024)
-	for {
-		n, err := reader.Read(buf)
-		if err != nil {
-			if err == io.EOF {
-				break
-			}
-			log.Printf("Read error: %s", err.Error())
-			os.Exit(1)
-		}
-		logText += string(buf[0:n])
+	text, err := readFile(*file)
+	if err != nil {
+		log.Print(err.Error())
+		os.Exit(1)
 	}
 
 	logMemory()
 
 	log.Printf("Generating suffix array...")
-	a, err := buildSuffixArray(logText)
+	a, err := buildSuffixArray(text)
 	if err != nil {
 		log.Print(err.Error())
 		os.Exit(1)
@@ -89,12 +74,37 @@ func main() {
 
 	log.Printf("Generating text...")
 	rand.Seed(time.Now().UnixNano())
-	text, err := generateTextFromSuffixArray(s, *sentenceLength, *k)
+	sentence, err := generateTextFromSuffixArray(s, *sentenceLength, *k)
 	if err != nil {
 		log.Print(err.Error())
 		os.Exit(1)
 	}
-	log.Printf("Generated: %s", text)
+	log.Printf("Generated: %s", sentence)
+}
+
+// readFile reads in a file as a string
+func readFile(filename string) (string, error) {
+	fh, err := os.Open(filename)
+	if err != nil {
+		return "", fmt.Errorf("Unable to open file: %s: %s", filename, err.Error())
+	}
+	defer fh.Close()
+
+	reader := bufio.NewReader(fh)
+	text := ""
+	buf := make([]byte, 10*1024*1024)
+	for {
+		n, err := reader.Read(buf)
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			return "", fmt.Errorf("Read error: %s", err.Error())
+		}
+		text += string(buf[0:n])
+	}
+
+	return text, nil
 }
 
 // buildSuffixArray takes a text and generates a suffix array.
