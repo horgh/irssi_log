@@ -15,6 +15,7 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"summercat.com/irssi_log/suffixarray"
 	"time"
 )
 
@@ -55,7 +56,7 @@ func main() {
 	logMemory()
 
 	log.Printf("Generating suffix array...")
-	a, err := buildSuffixArray(text)
+	a, err := suffixarray.Build(text)
 	if err != nil {
 		log.Print(err.Error())
 		os.Exit(1)
@@ -64,7 +65,7 @@ func main() {
 	logMemory()
 
 	log.Printf("Sorting suffix array...")
-	s, err := sortSuffixArray(a)
+	s, err := suffixarray.Sort(a)
 	if err != nil {
 		log.Print(err.Error())
 		os.Exit(1)
@@ -105,29 +106,6 @@ func readFile(filename string) (string, error) {
 	}
 
 	return text, nil
-}
-
-// buildSuffixArray takes a text and generates a suffix array.
-//
-// Note there is actually an index/suffixarray package in the core library.
-func buildSuffixArray(text string) ([]string, error) {
-	var suffixes []string
-	suffixes = append(suffixes, text[0:])
-
-	for i, c := range text {
-		if c == ' ' {
-			suffixes = append(suffixes, text[i+1:])
-			continue
-		}
-	}
-
-	return suffixes, nil
-}
-
-// sortSuffixArray sorts the suffix array.
-func sortSuffixArray(suffixArray []string) ([]string, error) {
-	sort.Strings(suffixArray)
-	return suffixArray, nil
 }
 
 // generateTextFromSuffixArray generates random text.
