@@ -8,8 +8,9 @@ import (
 	"flag"
 	"log"
 	"os"
-	"summercat.com/irssi_log"
 	"time"
+
+	"github.com/horgh/irssi_log"
 )
 
 func main() {

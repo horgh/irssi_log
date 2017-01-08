@@ -15,8 +15,9 @@ import (
 	"runtime"
 	"sort"
 	"strings"
-	"summercat.com/irssi_log/suffixarray"
 	"time"
+
+	"github.com/horgh/irssi_log/suffixarray"
 )
 
 func main() {

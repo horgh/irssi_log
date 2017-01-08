@@ -15,8 +15,9 @@ import (
 	"os"
 	"regexp"
 	"strings"
-	"summercat.com/irssi_log"
 	"time"
+
+	"github.com/horgh/irssi_log"
 )
 
 var urlPattern = regexp.MustCompile("https?:")
